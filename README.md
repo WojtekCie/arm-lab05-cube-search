@@ -8,31 +8,6 @@ Kostki są za niskie dla lidaru, więc widać je tylko kamerą. Dlatego eksplora
 
 Raport (1 strona A4): [`raport/raport.pdf`](raport/raport.pdf), źródła: `raport/raport.html` i `raport/raport.tex`.
 
-## Jak to działa
-
-```
-/camera/image_raw ─► aruco_detector ──/cube_search/detections──► cube_search_server ◄── goal: /search_cubes
-/odom, TF (AMCL)  ─┘   (ArUco + solvePnP)                         │  mapa pokrycia kamery
-                                                                  ├─/cube_search/coverage_map─► explore_lite ─► Nav2 ─► /cmd_vel
-                                                                  └─ obroty 360° ───────────────────────────────────► /cmd_vel
-```
-
-Pozycja kostki = `T_map_odom (AMCL) · T_odom_base (/odom na stemplu obrazu) · T_base_cam (tf_static) · T_cam_marker (solvePnP)`,
-następnie przesunięcie o 4.5 cm w głąb kostki.
-
-### Autorskie node'y (pakiet `cube_search`)
-
-| Node | Rola |
-|---|---|
-| `aruco_detector` | Wykrywa markery (`DICT_ARUCO_ORIGINAL`, bok 7.01 cm) z częstotliwością ok. 5 Hz. Liczy pozę markera przez `solvePnP` (IPPE_SQUARE) i sprawdza błąd reprojekcji. Pozycję środka kostki przelicza do ramki `map`. Publikuje `/cube_search/detections`. |
-| `search_server` | Serwer akcji `/search_cubes`. Prowadzi mapę pokrycia kamery (ray casting po mapie) i przekazuje ją do explore_lite jako „nieznane = niewidziane kamerą”. Na starcie wykonuje obrót 360°. Łączy obserwacje każdej kostki (mediana, odrzucanie odstających, potwierdzenie po ≥ 3 obserwacjach). Kończy pracę po znalezieniu N kostek, po osiągnięciu pokrycia lub po przekroczeniu limitu czasu. Feedback: stan, pokrycie i znalezione ID. |
-| `search_client` | Wysyła cel akcji i wypisuje tabelę wyników z błędem względem pozycji kostek z Gazebo. |
-| `pose_error_logger` | Narzędzie ewaluacyjne. Porównuje lokalizację (`/odom` oraz `/odom` + AMCL) i każdą detekcję z pozami z Gazebo, wyniki zapisuje do CSV. |
-
-Interfejsy (pakiet `cube_search_interfaces`): akcja `SearchCubes` (goal: `expected_cubes`, `coverage_goal`, `timeout`)
-oraz wiadomości `Cube`, `CubeDetection` i `CubeDetectionArray`. Eksploracja korzysta z gotowego
-[m-explore-ros2](https://github.com/robo-friends/m-explore-ros2) (explore_lite). `deploy.sh` pobiera go automatycznie.
-
 ## Uruchomienie
 
 Wymagania: Docker oraz obraz z [Dockerfile](Dockerfile) (ROS 2 Jazzy, Nav2, TurtleBot3, `arm05_sim`).
@@ -60,6 +35,33 @@ Topiki do podglądu w RViz: `/cube_search/coverage_map` (Map), `/cube_search/cub
 
 Ewaluację względem Gazebo uruchamia `ros2 launch cube_search evaluation.launch.py`, a wykresy:
 `python3 tools/plot_eval.py <katalog_csv> <wyjście>` oraz `python3 tools/plot_cube_error.py <katalog_csv> <wyjście>`.
+
+## Jak to działa
+
+```
+/camera/image_raw ─► aruco_detector ──/cube_search/detections──► cube_search_server ◄── goal: /search_cubes
+/odom, TF (AMCL)  ─┘   (ArUco + solvePnP)                         │  mapa pokrycia kamery
+                                                                  ├─/cube_search/coverage_map─► explore_lite ─► Nav2 ─► /cmd_vel
+                                                                  └─ obroty 360° ───────────────────────────────────► /cmd_vel
+```
+
+Pozycja kostki = `T_map_odom (AMCL) · T_odom_base (/odom na stemplu obrazu) · T_base_cam (tf_static) · T_cam_marker (solvePnP)`,
+następnie przesunięcie o 4.5 cm w głąb kostki.
+
+### Autorskie node'y (pakiet `cube_search`)
+
+| Node | Rola |
+|---|---|
+| `aruco_detector` | Wykrywa markery (`DICT_ARUCO_ORIGINAL`, bok 7.01 cm) z częstotliwością ok. 5 Hz. Liczy pozę markera przez `solvePnP` (IPPE_SQUARE) i sprawdza błąd reprojekcji. Pozycję środka kostki przelicza do ramki `map`. Publikuje `/cube_search/detections`. |
+| `search_server` | Serwer akcji `/search_cubes`. Prowadzi mapę pokrycia kamery (ray casting po mapie) i przekazuje ją do explore_lite jako „nieznane = niewidziane kamerą”. Na starcie wykonuje obrót 360°. Łączy obserwacje każdej kostki (mediana, odrzucanie odstających, potwierdzenie po ≥ 3 obserwacjach). Kończy pracę po znalezieniu N kostek, po osiągnięciu pokrycia lub po przekroczeniu limitu czasu. Feedback: stan, pokrycie i znalezione ID. |
+| `search_client` | Wysyła cel akcji i wypisuje tabelę wyników z błędem względem pozycji kostek z Gazebo. |
+| `pose_error_logger` | Narzędzie ewaluacyjne. Porównuje lokalizację (`/odom` oraz `/odom` + AMCL) i każdą detekcję z pozami z Gazebo, wyniki zapisuje do CSV. |
+
+Interfejsy (pakiet `cube_search_interfaces`): akcja `SearchCubes` (goal: `expected_cubes`, `coverage_goal`, `timeout`)
+oraz wiadomości `Cube`, `CubeDetection` i `CubeDetectionArray`. Eksploracja korzysta z gotowego
+[m-explore-ros2](https://github.com/robo-friends/m-explore-ros2) (explore_lite). `deploy.sh` pobiera go automatycznie.
+
+
 
 ## Wyniki (symulacja)
 
