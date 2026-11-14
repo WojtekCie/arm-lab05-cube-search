@@ -1,0 +1,20 @@
+# Autonomiczne przeszukanie mapy w poszukiwaniu kostek ArUco.
+# ----- Goal -----
+# Zakonczenie po potwierdzeniu tylu kostek (0 = tylko kryterium pokrycia).
+int32 expected_cubes 5
+# Wymagany ulamek pola docelowego "obejrzanego" kamera (0..1).
+float32 coverage_goal 0.95
+# Limit czasu [s] (czas symulacji), 0 = bez limitu.
+float32 timeout 1800.0
+---
+# ----- Result -----
+bool success
+string message
+cube_search_interfaces/Cube[] cubes
+float32 coverage
+float32 elapsed
+---
+# ----- Feedback -----
+string state
+float32 coverage
+int32[] found_ids

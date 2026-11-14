@@ -1,0 +1,49 @@
+aruco_detector:
+  ros__parameters:
+    image_topic: /camera/image_raw
+    camera_info_topic: /camera/camera_info
+    odom_topic: /odom
+    detections_topic: /cube_search/detections
+    base_frame: base_footprint
+    camera_frame: camera_rgb_frame
+    global_frame: map            # /odom + korekta map->odom z AMCL (odom dryfuje)
+    dictionary: DICT_ARUCO_ORIGINAL
+    marker_length: 0.0701        # czarny kwadrat markera (588/755 sciany 9 cm), NIE 0.09
+    cube_size: 0.09
+    process_rate: 5.0            # [Hz] czasu symulacji; obraz 1920x1080
+    max_odom_extrapolation: 0.05
+    min_marker_px: 12.0
+    max_reproj_err: 3.0
+    debug_image_scale: 0.5
+
+cube_search_server:
+  ros__parameters:
+    fov_deg: 45.0                # model pola widzenia (kamera ma 59 st., margines na brzegi kadru)
+    range_max: 3.5               # [m] zasieg, w ktorym detekcja markera 7 cm jest pewna
+    ray_step_deg: 0.5
+    target_clearance: 0.30       # kostki leza w wolnej przestrzeni >= 0.3 m od przeszkod
+    coverage_publish_period: 1.0
+    scan_speed: 0.6              # [rad/s] obrot skanujacy
+    scan_on_goal_reached: true
+    scan_min_travel: 1.0         # [m] min. przejazd od poprzedniego skanu
+    stall_timeout: 120.0         # [s] bez przyrostu pokrycia -> koniec
+    stall_min_gain: 0.005
+    min_observations: 3
+    inlier_radius: 0.25
+    z_gate: 0.06
+    max_detection_distance: 4.5
+
+explore_node:
+  ros__parameters:
+    robot_base_frame: base_footprint
+    costmap_topic: /cube_search/coverage_map
+    costmap_updates_topic: /cube_search/coverage_map_updates
+    visualize: true
+    planner_frequency: 0.5
+    progress_timeout: 30.0
+    potential_scale: 3.0
+    orientation_scale: 0.0
+    gain_scale: 1.0
+    transform_tolerance: 0.5
+    min_frontier_size: 0.5
+    return_to_init: false

@@ -1,0 +1,28 @@
+# Python
+__pycache__/
+*.py[cod]
+.pytest_cache/
+
+# colcon (gdyby budowac na hoscie)
+build/
+install/
+log/
+
+# LaTeX
+*.aux
+*.log
+!raport/logi/**/*.log
+*.out
+*.fls
+*.fdb_latexmk
+*.synctex.gz
+
+# edytory / system
+.vscode/
+.idea/
+*.swp
+.DS_Store
+
+# pliki robocze
+*.sh.1
+raport/plik.txt

@@ -1,0 +1,190 @@
+<!DOCTYPE html>
+<html lang="pl">
+<head>
+<meta charset="utf-8">
+<title>Robot poszukujący – raport</title>
+<style>
+  @page { size: A4; margin: 8mm 9mm 7mm 9mm; }
+  :root { --ink:#1b1f24; --muted:#5b6470; --line:#c9d1da; --accent:#1f5fa8; --bg2:#f2f5f9; }
+  * { box-sizing: border-box; }
+  html, body { margin:0; padding:0; background:#fff; color:var(--ink); }
+  body { font-family: "Liberation Sans", Arial, sans-serif; font-size: 8.1pt; line-height: 1.24; }
+  h1 { font-size: 12.4pt; margin: 0 0 1mm; color: var(--accent); letter-spacing: .1px; }
+  .sub { color: var(--muted); font-size: 7.6pt; margin-bottom: 1.6mm; border-bottom: 1.2px solid var(--accent); padding-bottom: 1.2mm; }
+  h2 { font-size: 9.2pt; margin: 1.6mm 0 .7mm; color: var(--accent); break-after: avoid; }
+  p { margin: 0 0 1mm; text-align: justify; hyphens: auto; }
+  ol, ul { margin: 0 0 1mm; padding-left: 4.2mm; }
+  li { margin: 0 0 .35mm; text-align: justify; hyphens: auto; }
+  code, .m { font-family: "DejaVu Sans Mono", monospace; font-size: 7.1pt; }
+  .cols { column-count: 2; column-gap: 5mm; }
+  .cols > section { break-inside: auto; }
+  table { border-collapse: collapse; width: 100%; font-size: 7.4pt; margin: .4mm 0 1mm; }
+  th, td { border: .6px solid var(--line); padding: .45mm 1.1mm; vertical-align: top; text-align: left; }
+  th { background: var(--bg2); font-weight: bold; }
+  .narrow { font-family: "Liberation Sans Narrow", "Liberation Sans", Arial, sans-serif; font-size: 7.7pt; }
+  .eq { background: var(--bg2); border-left: 2px solid var(--accent); padding: .8mm 1.6mm; margin: .6mm 0 1mm; font-size: 7.8pt; }
+  .fig { margin: 0; }
+  .fig svg { width: 100%; height: auto; display: block; }
+  .risk td, .risk th { padding: .25mm 1mm; white-space: nowrap; }
+  .res { float: right; margin: 0 0 .5mm 3mm; }
+  .res td:nth-child(n+2), .res th:nth-child(n+2) { text-align: right; min-width: 9mm; }
+  b.k { color: var(--accent); }
+</style>
+</head>
+<body>
+<h1>Lab 05 – „Robot poszukujący”: autonomiczne wyszukiwanie kostek ArUco</h1>
+<div class="sub">Autonomiczne roboty mobilne · TurtleBot3 <i>waffle</i>, ROS&nbsp;2 Jazzy, Gazebo Harmonic, Nav2 · kod: pakiety <code>cube_search</code>, <code>cube_search_interfaces</code></div>
+
+<div class="cols">
+<section>
+<h2>1. Cel i założenia</h2>
+<p>Robot ma bez znajomości przybliżonych położeń odnaleźć w świecie <code>arm_house</code> (mapa 25×14&nbsp;m, ok. 265&nbsp;m² wolnej przestrzeni) 5&nbsp;kostek o boku 9&nbsp;cm z tagami ArUco (słownik ARUCO_ORIGINAL) i zwrócić <b>jako wynik akcji</b> ich ID oraz pozycję (x,&nbsp;y). Kostki wykrywa wyłącznie kamera RGB (<code>/camera/image_raw</code>, 1920×1080, HFOV&nbsp;59°). Lidar skanuje ponad kostką i służy tylko do lokalizacji i nawigacji.</p>
+<p>Założenia: mapa jest znana (Nav2 + AMCL działają), świat jest statyczny, a kostki stoją na podłodze w wolnej przestrzeni, ≥0.3&nbsp;m od przeszkód. Robot przyjmuje ruch na <code>/cmd_vel</code> (TwistStamped). Kryterium „przeszukano wszystko” to <b>pokrycie wolnej przestrzeni stożkiem kamery</b> (FOV&nbsp;45°, zasięg 3.5&nbsp;m, przesłanianie przez ściany), bo mapa lidaru jest kompletna od początku.</p>
+
+<h2>2. Strategia działania</h2>
+<p>Klasyczna eksploracja frontierowa działa tu na <b>mapie pokrycia kamery</b>. Komórka staje się „znana”, gdy znalazła się w stożku kamery. Gotowy <code>explore_lite</code> dostaje tę siatkę zamiast mapy SLAM (niewidziane = <i>unknown</i>) i wybiera frontiery, a Nav2 dowozi robota.</p>
+<ol>
+<li><b>Cel akcji</b> <code>/search_cubes</code> zeruje mapę pokrycia i estymaty. Pole docelowe obejmuje wolne komórki ze składowej spójnej robota.</li>
+<li><b>Obrót 360°</b> w miejscu: 0.6&nbsp;rad/s na <code>/cmd_vel</code>, kąt całkowany z <code>/odom</code>.</li>
+<li><b>Eksploracja:</b> publikacja mapy pokrycia, z której explore_lite wysyła cele <code>NavigateToPose</code> do Nav2. Po osiągnięciu celu następuje pauza explore_lite i kolejny obrót 360°.</li>
+<li><b>Równolegle detekcja</b> (5&nbsp;Hz): ArUco → <code>solvePnP</code> (IPPE_SQUARE, bok markera 7.01&nbsp;cm) → łańcuch przekształceń (rys.) → fuzja (bramka wysokości i odległości, mediana, potwierdzenie po ≥3 obserwacjach).</li>
+<li><b>Stop</b>, gdy zajdzie którykolwiek z warunków: potwierdzono 5&nbsp;ID, pokrycie ≥95%, brak frontierów, 120&nbsp;s bez przyrostu pokrycia, timeout. Wynik: ID, (x,&nbsp;y) w ramce <code>map</code>, liczba obserwacji, rozrzut.</li>
+</ol>
+<table class="narrow">
+<tr><th>Node</th><th>Odpowiedzialność</th></tr>
+<tr><td><code>aruco_detector</code></td><td>obraz → środki kostek w <code>map</code> + poza kamery</td></tr>
+<tr><td><code>cube_search_server</code></td><td>akcja: pokrycie, explore_lite, obroty, fuzja, stop</td></tr>
+<tr><td><code>explore_lite</code></td><td>frontiery na mapie pokrycia → cele Nav2</td></tr>
+<tr><td>Nav2 + AMCL</td><td>lokalizacja (map→odom), planowanie, jazda</td></tr>
+<tr><td><code>search_client</code></td><td>cel, postęp, porównanie z <code>latest.txt</code></td></tr>
+</table>
+</section>
+</div>
+
+<h2>3. Schematy i diagramy</h2>
+<figure class="fig">
+<svg viewBox="0 0 760 228" xmlns="http://www.w3.org/2000/svg" font-family="Liberation Sans, Arial, sans-serif">
+  <defs>
+    <marker id="a" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" fill="#3b4a5a"/></marker>
+    <marker id="b" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" fill="#1f5fa8"/></marker>
+  </defs>
+  <style>
+    .box{fill:#f2f5f9;stroke:#3b4a5a;stroke-width:1.1}
+    .own{fill:#e3eefb;stroke:#1f5fa8;stroke-width:1.5}
+    .ext{fill:#fff;stroke:#7a8794;stroke-width:1.1;stroke-dasharray:4 2}
+    .t{font-size:11.5px;font-weight:bold;fill:#1b1f24}
+    .s{font-size:9.6px;fill:#3b4a5a}
+    .l{font-size:9.2px;fill:#1b1f24}
+    .ln{fill:none;stroke:#3b4a5a;stroke-width:1.1;marker-end:url(#a)}
+    .lb{fill:none;stroke:#1f5fa8;stroke-width:1.3;marker-end:url(#b)}
+    .st{fill:#fff;stroke:#1f5fa8;stroke-width:1.1}
+  </style>
+  <!-- bloki -->
+  <rect class="ext" x="6" y="88" width="150" height="62" rx="5"/>
+  <text class="t" x="81" y="106" text-anchor="middle">Gazebo + ros_gz_bridge</text>
+  <text class="s" x="81" y="120" text-anchor="middle">kamera 1920×1080, /odom, /scan</text>
+  <text class="s" x="81" y="132" text-anchor="middle">robot_state_publisher (tf_static)</text>
+  <text class="s" x="81" y="144" text-anchor="middle">map_server: /map</text>
+
+  <rect class="own" x="236" y="22" width="180" height="50" rx="5"/>
+  <text class="t" x="326" y="41" text-anchor="middle">aruco_detector</text>
+  <text class="s" x="326" y="55" text-anchor="middle">ArUco + solvePnP, interpolacja /odom</text>
+  <text class="s" x="326" y="67" text-anchor="middle">5 Hz (czas symulacji)</text>
+
+  <rect class="own" x="236" y="116" width="180" height="64" rx="5"/>
+  <text class="t" x="326" y="133" text-anchor="middle">cube_search_server</text>
+  <text class="s" x="326" y="146" text-anchor="middle">serwer akcji /search_cubes</text>
+  <text class="s" x="326" y="158" text-anchor="middle">mapa pokrycia (ray casting) · fuzja</text>
+  <text class="s" x="326" y="170" text-anchor="middle">obroty 360° · stop (status Nav2)</text>
+
+  <rect class="box" x="522" y="22" width="120" height="50" rx="5"/>
+  <text class="t" x="582" y="41" text-anchor="middle">Nav2 + AMCL</text>
+  <text class="s" x="582" y="55" text-anchor="middle">planner · DWB · costmapy</text>
+  <text class="s" x="582" y="67" text-anchor="middle">TF map→odom</text>
+
+  <rect class="box" x="522" y="122" width="120" height="46" rx="5"/>
+  <text class="t" x="582" y="141" text-anchor="middle">explore_lite</text>
+  <text class="s" x="582" y="156" text-anchor="middle">frontiery (Yamauchi)</text>
+
+  <rect class="own" x="6" y="188" width="150" height="34" rx="5"/>
+  <text class="t" x="81" y="203" text-anchor="middle">search_client</text>
+  <text class="s" x="81" y="216" text-anchor="middle">goal · feedback · result</text>
+
+  <!-- polaczenia -->
+  <path class="ln" d="M156,100 H200 V47 H234"/>
+  <text class="l" x="195" y="40" text-anchor="end">/camera/image_raw,</text>
+  <text class="l" x="195" y="51" text-anchor="end">camera_info, /odom,</text>
+  <text class="l" x="195" y="62" text-anchor="end">tf_static (base→cam)</text>
+  <path class="lb" d="M326,72 V114"/>
+  <text class="l" x="331" y="89">/cube_search/detections</text>
+  <text class="l" x="331" y="100">(ID, środek kostki, poza kamery)</text>
+  <path class="ln" d="M522,40 H418"/>
+  <text class="l" x="428" y="34">TF map→odom</text>
+  <path class="lb" d="M416,138 H520"/>
+  <text class="l" x="422" y="122">coverage_map,</text>
+  <text class="l" x="422" y="133">/explore/resume</text>
+  <path class="ln" d="M522,158 H418"/>
+  <text class="l" x="424" y="171">/explore/status</text>
+  <path class="ln" d="M582,122 V74"/>
+  <text class="l" x="576" y="102" text-anchor="end">NavigateToPose</text>
+  <path class="ln" d="M612,22 V8 H60 V86"/>
+  <text class="l" x="64" y="20">/cmd_vel (jazda)</text>
+  <path class="lb" d="M236,138 H158"/>
+  <text class="l" x="163" y="133">/cmd_vel</text>
+  <text class="l" x="163" y="150">(obrót 360°)</text>
+  <path class="lb" d="M156,205 H326 V182"/>
+  <text class="l" x="168" y="199">akcja /search_cubes</text>
+
+  <!-- maszyna stanow -->
+  <text class="t" x="703" y="15" text-anchor="middle">przebieg akcji</text>
+  <rect class="st" x="652" y="21" width="102" height="22" rx="10"/>
+  <text class="l" x="703" y="35" text-anchor="middle">reset + obrót 360°</text>
+  <path class="lb" d="M703,43 V57"/>
+  <rect class="st" x="652" y="59" width="102" height="30" rx="6"/>
+  <text class="l" x="703" y="71" text-anchor="middle">EKSPLORACJA</text>
+  <text class="l" x="703" y="83" text-anchor="middle">explore_lite → Nav2</text>
+  <path class="lb" d="M722,89 V107"/>
+  <rect class="st" x="652" y="109" width="102" height="30" rx="6"/>
+  <text class="l" x="703" y="121" text-anchor="middle">cel osiągnięty →</text>
+  <text class="l" x="703" y="133" text-anchor="middle">pauza, obrót 360°</text>
+  <path class="lb" d="M684,109 V91"/>
+  <path class="lb" d="M703,139 V155"/>
+  <rect class="st" x="652" y="157" width="102" height="40" rx="6"/>
+  <text class="l" x="703" y="169" text-anchor="middle">STOP: 5 ID ∨ pokrycie</text>
+  <text class="l" x="703" y="180" text-anchor="middle">≥95% ∨ brak frontierów</text>
+  <text class="l" x="703" y="191" text-anchor="middle">∨ stagnacja ∨ timeout</text>
+  <path class="lb" d="M703,197 V205"/>
+  <rect class="st" x="652" y="206" width="102" height="19" rx="9"/>
+  <text class="l" x="703" y="219" text-anchor="middle">wynik: ID + (x, y)</text>
+</svg>
+</figure>
+<div class="eq"><b>Łańcuch przekształceń</b> (na stemplu czasowym zdjęcia): T<sup>map</sup><sub>kostka</sub> = T<sup>map</sup><sub>odom</sub>(AMCL) · T<sup>odom</sup><sub>base</sub>(<code>/odom</code>, interpolacja) · T<sup>base</sup><sub>cam</sub>(tf_static: t=[0.069, −0.047, 0.117]&nbsp;m, R=I) · R<sup>cam</sup><sub>opt</sub> · T<sup>opt</sup><sub>marker</sub>(solvePnP) · [0,&nbsp;0,&nbsp;−0.045]<sup>T</sup>.
+R<sup>cam</sup><sub>opt</sub>=[[0,0,1],[−1,0,0],[0,−1,0]], bo obraz ma <code>frame_id=camera_rgb_frame</code> (x do przodu), a OpenCV zwraca pozę w ramce optycznej (z do przodu). Normalną ściany rzutujemy na poziom.</div>
+
+<h2>4. Wykorzystane narzędzia</h2>
+<p><b>ROS&nbsp;2 Jazzy</b> (rclpy, akcje, <code>tf2_ros</code>); <b>Nav2</b> (NavigateToPose, NavFn, DWB, AMCL, map_server); <b>explore_lite</b> z m-explore-ros2 (frontier exploration, Yamauchi 1997; ze źródeł, commit 326cf8a); <b>OpenCV 4.6</b> (<code>cv2.aruco</code>, <code>solvePnP</code>) + <code>cv_bridge</code>; <b>NumPy/SciPy</b> (wektorowy ray casting, transformata odległości, składowe spójne); <b>Gazebo Harmonic</b> + <code>ros_gz_bridge</code>; RViz2; <b>pytest</b> (14 testów: osie, render markera z K kamery, przesłanianie, fuzja).</p>
+
+<h2>5. Potencjalne ryzyka</h2>
+<table class="narrow risk">
+<tr><th style="width:31%">Ryzyko</th><th style="width:40%">Weryfikacja</th><th>Obejście</th></tr>
+<tr><td>Zły bok markera (9&nbsp;cm to bok ściany)</td><td>tekstura: kwadrat 588/755 ściany; 0.09&nbsp;m → odległość +28% (test)</td><td><code>marker_length</code>=0.0701&nbsp;m</td></tr>
+<tr><td>Obraz nie jest w ramce optycznej</td><td><code>frame_id=camera_rgb_frame</code>; test osi</td><td>jawny obrót do ramki optycznej</td></tr>
+<tr><td>Dryf odometrii</td><td>pomiar 514&nbsp;s vs Gazebo: odom śr. <b>25</b> (maks. 50)&nbsp;cm, AMCL <b>10</b> (30)&nbsp;cm</td><td>korekta map→odom z AMCL</td></tr>
+<tr><td>Rozjazd czasu obraz/odom przy obrocie</td><td>0.6&nbsp;rad/s × 0.1&nbsp;s ≈ 18&nbsp;cm na 3&nbsp;m</td><td>interpolacja /odom na stemplu</td></tr>
+<tr><td>Fałszywe detekcje ArUco</td><td>ID 1023, 5 oraz fałszywe ID&nbsp;0 z 4.5&nbsp;m (8 klatek z rzędu)</td><td>bramki z, d≤4.5&nbsp;m; ≥3 obs.; mediana</td></tr>
+<tr><td>Głębia z PnP dla małych markerów</td><td>&gt;3&nbsp;m: med. 15–26&nbsp;cm (w głębi); okno subpix 11×11 zaniża d</td><td>okno 3&nbsp;px, d≤3&nbsp;m, triangulacja</td></tr>
+<tr><td><code>/map</code>: szary 205 = wolny, dom „otwarty”</td><td>brak −1 w <code>/map</code>; składowa robota 341 zamiast 265&nbsp;m²</td><td>maska z pliku PGM</td></tr>
+<tr><td>explore_lite: centroid, yaw=0, podmiana co 2&nbsp;s</td><td>przebiegi: Nav2 rzadko kończy cel</td><td>obroty 360°, watchdog, kilka stopów</td></tr>
+<tr><td>Zanik Wi-Fi zrywa multicast gz/DDS</td><td>„Network is unreachable”, stoi <code>/clock</code></td><td><code>GZ_IP=127.0.0.1</code>, discovery LOCALHOST</td></tr>
+</table>
+
+<h2>6. Wnioski</h2>
+<p><b>Test</b> (losowe kostki, start w (0,0), wzorzec <code>latest.txt</code>): wszystkie <b>5/5 kostek potwierdzone po 335&nbsp;s</b> czasu symulacji (ok. 11&nbsp;min, RTF≈0.5) przy pokryciu 80.6%. <b>Średni błąd pozycji 12.0&nbsp;cm</b> (maks. 21&nbsp;cm):</p>
+<table class="narrow res" style="width:auto">
+<tr><th>ID</th><th>0</th><th>1</th><th>2</th><th>3</th><th>4</th></tr>
+<tr><td>błąd [cm]</td><td>21.2</td><td>6.6</td><td>8.1</td><td>20.8</td><td>3.1</td></tr>
+<tr><td>obserwacje</td><td>41</td><td>64</td><td>18</td><td>17</td><td>4</td></tr>
+</table>
+<p>Pozę liczoną z samego <code>/odom</code> wcześniejszy przebieg miał błąd 74&nbsp;cm (dryf ~1&nbsp;m). Przebieg z kryterium pokrycia osiągnął 95% po 494&nbsp;s (5/5, 12.1&nbsp;cm), a inny, w którym robot utknął przy ścianie, zatrzymał watchdog przy 80%. <b>Pomiar względem Gazebo</b> (514&nbsp;s): sama odometria ma śr. 25&nbsp;cm (maks. 50), z korektą AMCL 10&nbsp;cm (maks. 30), stąd ramka <code>map</code>. <b>Rozkład błędu detekcji:</b> do 2&nbsp;m sama percepcja to 1.6&nbsp;cm przy całkowitym 8.7&nbsp;cm (dominuje lokalizacja). Powyżej 3&nbsp;m percepcja ma 15–26&nbsp;cm, prawie wyłącznie w głębi (poprzecznie 0.4&nbsp;cm), częściowo przez bias doprecyzowania narożników. <b>Dalszy rozwój:</b> triangulacja kierunków z wielu widoków zamiast głębi z PnP, okno subpix 3&nbsp;px i bramka ~3&nbsp;m, NBV z orientacją celu, dojazd weryfikacyjny, odzyskiwanie po utknięciu, test na rzeczywistym robocie.</p>
+</body>
+</html>
